@@ -1,0 +1,3 @@
+[submodule "pkgs/dwl"]
+	path = pkgs/dwl
+	url = https://github.com/your-username/dwl-nix.git
