@@ -1,0 +1,2 @@
+{ callPackage, ... }:
+callPackage ./equibop.nix {}

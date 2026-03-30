@@ -1,0 +1,107 @@
+diff --git a/src/evdev.c b/src/evdev.c
+index cac971f4..d57d1646 100644
+--- a/src/evdev.c
++++ b/src/evdev.c
+@@ -1617,6 +1617,85 @@ evdev_fix_abs_resolution(struct evdev_device *device,
+ 	return xres == EVDEV_FAKE_RESOLUTION;
+ }
+ 
++static enum evdev_device_udev_tags
++evdev_udev_tags_from_kernel(struct evdev_device *device)
++{
++	struct libevdev *evdev = device->evdev;
++	enum evdev_device_udev_tags tags = EVDEV_UDEV_TAG_INPUT;
++
++	/*
++	 * Infer the udev sub-type tags from kernel event capabilities,
++	 * mirroring the logic udev's 60-input-id.rules would apply.
++	 */
++
++	if (libevdev_has_event_type(evdev, EV_KEY)) {
++		/* Keyboard: has a full alpha row */
++		bool is_keyboard = true;
++		for (int code = KEY_Q; code <= KEY_P; code++) {
++			if (!libevdev_has_event_code(evdev, EV_KEY, code)) {
++				is_keyboard = false;
++				break;
++			}
++		}
++		if (is_keyboard)
++			tags |= EVDEV_UDEV_TAG_KEYBOARD;
++
++		/* Mouse: has left button */
++		if (libevdev_has_event_code(evdev, EV_KEY, BTN_LEFT))
++			tags |= EVDEV_UDEV_TAG_MOUSE;
++
++		/* Touchpad: INPUT_PROP_POINTER with touch axes */
++		if (libevdev_has_property(evdev, INPUT_PROP_POINTER) &&
++		    (libevdev_has_event_code(evdev, EV_KEY, BTN_TOUCH) ||
++		     libevdev_has_event_code(evdev, EV_KEY, BTN_TOOL_FINGER)))
++			tags |= EVDEV_UDEV_TAG_TOUCHPAD;
++
++		/* Touchscreen: INPUT_PROP_DIRECT with touch */
++		if (libevdev_has_property(evdev, INPUT_PROP_DIRECT) &&
++		    libevdev_has_event_code(evdev, EV_KEY, BTN_TOUCH))
++			tags |= EVDEV_UDEV_TAG_TOUCHSCREEN;
++
++		/* Tablet: has stylus or pen tool */
++		if (libevdev_has_event_code(evdev, EV_KEY, BTN_STYLUS) ||
++		    libevdev_has_event_code(evdev, EV_KEY, BTN_TOOL_PEN))
++			tags |= EVDEV_UDEV_TAG_TABLET;
++
++		/* Tablet pad: INPUT_PROP_BUTTONPAD with pad buttons */
++		if (libevdev_has_event_code(evdev, EV_KEY, BTN_0) &&
++		    libevdev_has_property(evdev, INPUT_PROP_BUTTONPAD))
++			tags |= EVDEV_UDEV_TAG_TABLET_PAD;
++
++		/* Pointing stick: INPUT_PROP_POINTING_STICK */
++		if (libevdev_has_property(evdev, INPUT_PROP_POINTING_STICK))
++			tags |= EVDEV_UDEV_TAG_POINTINGSTICK;
++
++		/* Joystick: has joystick buttons */
++		if (libevdev_has_event_code(evdev, EV_KEY, BTN_JOYSTICK))
++			tags |= EVDEV_UDEV_TAG_JOYSTICK;
++	}
++
++	if (libevdev_has_event_type(evdev, EV_REL)) {
++		/* A device with REL_X/Y and no BTN_LEFT may still be a mouse
++		 * (e.g. a trackball or pointing stick without a click button
++		 * on the same node). */
++		if (libevdev_has_event_code(evdev, EV_REL, REL_X) &&
++		    libevdev_has_event_code(evdev, EV_REL, REL_Y) &&
++		    !(tags & EVDEV_UDEV_TAG_MOUSE))
++			tags |= EVDEV_UDEV_TAG_MOUSE;
++	}
++
++	if (libevdev_has_event_type(evdev, EV_ABS)) {
++		/* Accelerometer */
++		if (libevdev_has_property(evdev, INPUT_PROP_ACCELEROMETER))
++			tags |= EVDEV_UDEV_TAG_ACCELEROMETER;
++	}
++
++	if (libevdev_has_event_type(evdev, EV_SW))
++		tags |= EVDEV_UDEV_TAG_SWITCH;
++
++	return tags;
++}
++
+ static enum evdev_device_udev_tags
+ evdev_device_get_udev_tags(struct evdev_device *device, struct udev_device *udev_device)
+ {
+@@ -1634,6 +1713,16 @@ evdev_device_get_udev_tags(struct evdev_device *device, struct udev_device *udev
+ 		udev_device = udev_device_get_parent(udev_device);
+ 	}
+ 
++	/*
++	 * If udev gave us nothing useful (no ID_INPUT and no sub-type tags),
++	 * fall back to inferring tags from kernel capabilities reported by
++	 * libevdev. This allows libinput to work without udev, e.g. when
++	 * opened via a raw fd path backend.
++	 */
++	if ((tags & EVDEV_UDEV_TAG_INPUT) == 0 ||
++	    (tags & ~EVDEV_UDEV_TAG_INPUT) == 0)
++		tags = evdev_udev_tags_from_kernel(device);
++
+ 	return tags;
+ }
+ 
